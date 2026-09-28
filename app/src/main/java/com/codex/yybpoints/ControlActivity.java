@@ -17,6 +17,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 /** Physical-screen controls and confirmed reward history for hidden video playback. */
 public final class ControlActivity extends Activity {
@@ -37,7 +42,11 @@ public final class ControlActivity extends Activity {
     private TextView total;
     private TextView unresolved;
     private Button startButton;
+    private LinearLayout summarySection;
     private LinearLayout history;
+    private LinearLayout details;
+    private Button detailsButton;
+    private boolean detailsExpanded;
     private BackgroundBatchCoordinator coordinator;
     private final BackgroundBatchCoordinator.Listener listener = message -> {
         status.setText(message);
@@ -109,25 +118,32 @@ public final class ControlActivity extends Activity {
         stop.setOnClickListener(v -> coordinator.stop());
         page.addView(stop, top(10));
 
-        page.addView(label("本轮到账明细", 18, TEXT, true), top(28));
-        page.addView(label("仅记录已确认领奖；金额优先取应用宝领取成功回执", 12, MUTED, false), top(4));
+        summarySection = new LinearLayout(this);
+        summarySection.setOrientation(LinearLayout.VERTICAL);
+        page.addView(summarySection, top(28));
+        summarySection.addView(label("本轮任务总结", 18, TEXT, true));
         history = card();
-        page.addView(history, top(12));
+        summarySection.addView(history, top(12));
+        detailsButton = button("查看逐条已核对积分", 0xFF2A4052, TEXT);
+        detailsButton.setOnClickListener(v -> {
+            detailsExpanded = !detailsExpanded;
+            renderHistory();
+        });
+        summarySection.addView(detailsButton, top(10));
+        details = card();
+        summarySection.addView(details, top(10));
 
         Button uninstall = button("清理并卸载模块", 0xFF302535, 0xFFFFC7C7);
         uninstall.setOnClickListener(v -> {
             uninstall.setEnabled(false);
-            coordinator.stop(success -> {
-                uninstall.setEnabled(true);
-                if (!success || isFinishing() || isDestroyed()) return;
-                try {
-                    startActivity(new Intent(Intent.ACTION_DELETE,
-                            Uri.parse("package:" + getPackageName())));
-                } catch (ActivityNotFoundException error) {
-                    Log.e(TAG, "system uninstall screen unavailable", error);
-                    status.setText("系统卸载界面不可用；可在系统设置中卸载本模块");
-                }
-            });
+            if (!coordinator.isSessionActive() && !coordinator.hasHiddenDisplay()) {
+                openSystemUninstall(uninstall);
+            } else {
+                coordinator.stop(success -> {
+                    if (!success) status.setText("后台停止未确认；系统卸载时会再次清理，必要时重启手机");
+                    openSystemUninstall(uninstall);
+                });
+            }
         });
         page.addView(uninstall, top(28));
         page.addView(label("卸载前会结束视频、移除隐藏显示和应用宝进程。",
@@ -136,6 +152,18 @@ public final class ControlActivity extends Activity {
         setContentView(scroll);
         coordinator = BackgroundBatchCoordinator.get(this);
         coordinator.setListener(listener);
+    }
+
+    private void openSystemUninstall(Button uninstall) {
+        uninstall.setEnabled(true);
+        if (isFinishing() || isDestroyed()) return;
+        try {
+            startActivity(new Intent(Intent.ACTION_DELETE,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException error) {
+            Log.e(TAG, "system uninstall screen unavailable", error);
+            status.setText("系统卸载界面不可用；可在系统设置中卸载本模块");
+        }
     }
 
     @Override protected void onResume() {
@@ -155,27 +183,62 @@ public final class ControlActivity extends Activity {
         List<RewardHistory.Entry> entries = coordinator.rewards();
         int sum = 0;
         int unknown = 0;
+        Map<Integer, Integer> amounts = new TreeMap<>();
+        for (RewardHistory.Entry entry : entries) {
+            if (entry.points > 0) {
+                sum += entry.points;
+                amounts.put(entry.points, amounts.getOrDefault(entry.points, 0) + 1);
+            } else unknown++;
+        }
+        int known = entries.size() - unknown;
+        boolean showSummary = !entries.isEmpty() && coordinator.rewardsFinished();
+        summarySection.setVisibility(showSummary ? View.VISIBLE : View.GONE);
         history.removeAllViews();
-        if (entries.isEmpty()) {
-            history.addView(label("开始后台观看后，已领奖的视频会显示在这里。",
-                    13, MUTED, false));
-        } else {
+        details.removeAllViews();
+        if (showSummary) {
+            long startedAt = coordinator.rewardsStartedAt();
+            long finishedAt = coordinator.rewardsFinishedAt();
+            if (startedAt > 0 && finishedAt >= startedAt) {
+                SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                        Locale.getDefault());
+                history.addView(label("时间：" + format.format(new Date(startedAt)) + " 至 "
+                        + format.format(new Date(finishedAt)), 12, MUTED, false));
+            }
+            history.addView(label("完成 " + entries.size() + " 条 · 已核对 " + known
+                    + " 条 · 共 " + sum + " 积分", 16, TEXT, true), top(8));
+            if (!amounts.isEmpty()) {
+                StringBuilder breakdown = new StringBuilder();
+                for (Map.Entry<Integer, Integer> amount : amounts.entrySet()) {
+                    if (breakdown.length() > 0) breakdown.append("  ·  ");
+                    breakdown.append("+").append(amount.getKey()).append(" × ")
+                            .append(amount.getValue());
+                }
+                history.addView(label("已核对：" + breakdown, 13, ACCENT, false), top(8));
+            }
+            if (unknown > 0) {
+                history.addView(label(unknown + " 条已领奖，但回执缺少积分金额", 12,
+                        MUTED, false), top(8));
+            }
+        }
+        detailsButton.setVisibility(showSummary && known > 0 ? View.VISIBLE : View.GONE);
+        detailsButton.setText(detailsExpanded ? "收起逐条已核对积分" : "查看逐条已核对积分");
+        details.setVisibility(showSummary && known > 0 && detailsExpanded
+                ? View.VISIBLE : View.GONE);
+        if (showSummary && detailsExpanded) {
             for (int i = entries.size() - 1; i >= 0; i--) {
                 RewardHistory.Entry entry = entries.get(i);
-                if (entry.points > 0) sum += entry.points;
-                else unknown++;
+                if (entry.points <= 0) continue;
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                if (i != entries.size() - 1) row.setPadding(0, dp(12), 0, 0);
+                if (details.getChildCount() > 0) row.setPadding(0, dp(12), 0, 0);
                 LinearLayout names = new LinearLayout(this);
                 names.setOrientation(LinearLayout.VERTICAL);
                 names.addView(label("第 " + entry.sequence + " 条视频", 15, TEXT, true));
                 names.addView(label("任务 ID " + entry.taskId, 11, MUTED, false), top(3));
                 row.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
-                row.addView(label(entry.points > 0 ? "+" + entry.points + " 积分"
-                        : "金额待核对", 13, entry.points > 0 ? ACCENT : MUTED, true));
-                history.addView(row);
+                row.addView(label("+" + entry.points + " 积分", 13, ACCENT, true));
+                details.addView(row);
             }
         }
         completed.setText(entries.size() + " 条");

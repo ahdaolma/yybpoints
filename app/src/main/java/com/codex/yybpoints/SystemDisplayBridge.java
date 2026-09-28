@@ -130,20 +130,20 @@ final class SystemDisplayBridge {
                     try {
                         int taskId = findTargetTask(context);
                         if (taskId > 0) {
-                            Class<?> manager = XposedHelpers.findClass("android.app.ActivityTaskManager", null);
-                            Object service = XposedHelpers.callStaticMethod(manager, "getService");
-                            XposedHelpers.callMethod(service, "moveRootTaskToDisplay", taskId, displayId);
-                            XposedBridge.log("YYBBackground: moved task=" + taskId
-                                    + " display=" + displayId);
+                            try {
+                                Class<?> manager = XposedHelpers.findClass("android.app.ActivityTaskManager", null);
+                                Object service = XposedHelpers.callStaticMethod(manager, "getService");
+                                XposedHelpers.callMethod(service, "moveRootTaskToDisplay", taskId, displayId);
+                                XposedBridge.log("YYBBackground: moved task=" + taskId
+                                        + " display=" + displayId);
+                            } catch (Throwable migrationError) {
+                                Log.w(TAG, "existing task migration failed; relaunching on hidden display",
+                                        migrationError);
+                                forceStopTarget(context);
+                                launchTargetOnDisplay(context, displayId);
+                            }
                         } else {
-                            Intent launch = new Intent(Intent.ACTION_MAIN)
-                                    .setComponent(new ComponentName("com.tencent.android.qqdownloader",
-                                            "com.tencent.assistantv2.activity.MainActivity"))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            ActivityOptions options = ActivityOptions.makeBasic();
-                            options.setLaunchDisplayId(displayId);
-                            context.startActivity(launch, options.toBundle());
-                            XposedBridge.log("YYBBackground: started app on display=" + displayId);
+                            launchTargetOnDisplay(context, displayId);
                         }
                     } catch (Throwable error) {
                         release();
@@ -169,6 +169,17 @@ final class SystemDisplayBridge {
         if (manager == null) throw new IllegalStateException("ActivityManager unavailable");
         XposedHelpers.callMethod(manager, "forceStopPackage", TARGET);
         Log.i(TAG, "force-stopped target package=" + TARGET);
+    }
+
+    private static void launchTargetOnDisplay(Context context, int displayId) {
+        Intent launch = new Intent(Intent.ACTION_MAIN)
+                .setComponent(new ComponentName(TARGET,
+                        "com.tencent.assistantv2.activity.MainActivity"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        ActivityOptions options = ActivityOptions.makeBasic();
+        options.setLaunchDisplayId(displayId);
+        context.startActivity(launch, options.toBundle());
+        XposedBridge.log("YYBBackground: started app on display=" + displayId);
     }
 
     private static int findTargetTask(Context context) {

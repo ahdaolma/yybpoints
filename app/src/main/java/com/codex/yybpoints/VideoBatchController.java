@@ -11,7 +11,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
@@ -526,9 +525,6 @@ final class VideoBatchController {
                 boolean loginRequired = ControlBridge.loginPromptVisible();
                 stop(loginRequired ? "应用宝未登录：请先打开应用宝登录账号"
                         : "没有更多可看的视频任务");
-                if (!loginRequired && activity != null) {
-                    Toast.makeText(activity, "没有可开始的视频任务", Toast.LENGTH_SHORT).show();
-                }
                 return;
             }
             String id = (String) XposedHelpers.callMethod(candidate, "j");

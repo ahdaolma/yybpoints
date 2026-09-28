@@ -3,6 +3,7 @@ package com.codex.yybpoints;
 import android.app.Activity;
 import android.os.SystemClock;
 import android.util.Log;
+import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.lang.reflect.Method;
@@ -35,6 +36,17 @@ public final class HookEntry implements IXposedHookLoadPackage {
             return;
         }
         if (!TARGET.equals(param.packageName)) return;
+        if (TARGET.equals(param.processName)) {
+            try {
+                XposedHelpers.findAndHookMethod(Toast.class, "show", new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                        if (VideoBatchController.isRunning()) hook.setResult(null);
+                    }
+                });
+            } catch (Throwable error) {
+                Log.w(TAG, "hidden playback toast isolation unavailable", error);
+            }
+        }
         try {
             BackgroundAudioIsolation.install();
         } catch (Throwable error) {

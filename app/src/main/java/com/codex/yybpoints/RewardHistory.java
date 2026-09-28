@@ -41,8 +41,23 @@ final class RewardHistory {
 
     synchronized void reset() {
         entries.clear();
+        preferences.edit().putBoolean("finished", false)
+                .putLong("started_at", System.currentTimeMillis())
+                .putLong("finished_at", 0L).apply();
         persist();
     }
+
+    synchronized void finish() {
+        if (!entries.isEmpty() && !isFinished()) preferences.edit()
+                .putBoolean("finished", true)
+                .putLong("finished_at", System.currentTimeMillis()).apply();
+    }
+
+    boolean isFinished() { return preferences.getBoolean("finished", false); }
+
+    long startedAt() { return preferences.getLong("started_at", 0L); }
+
+    long finishedAt() { return preferences.getLong("finished_at", 0L); }
 
     synchronized void record(int sequence, String taskId, int points) {
         if (sequence <= 0 || taskId == null || taskId.isEmpty()) return;

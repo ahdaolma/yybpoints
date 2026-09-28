@@ -112,9 +112,24 @@ final class BackgroundBatchCoordinator {
 
     List<RewardHistory.Entry> rewards() { return new RewardHistory(context).snapshot(); }
 
+    boolean rewardsFinished() { return new RewardHistory(context).isFinished(); }
+
+    long rewardsStartedAt() { return new RewardHistory(context).startedAt(); }
+
+    long rewardsFinishedAt() { return new RewardHistory(context).finishedAt(); }
+
     AccountProfileStore.Profile account() { return new AccountProfileStore(context).read(); }
 
     boolean isSessionActive() { return sessionActive || waiting || stopping; }
+
+    boolean hasHiddenDisplay() {
+        DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+        if (manager == null) return false;
+        for (Display display : manager.getDisplays()) {
+            if ("YYBPoints-Trusted".equals(display.getName())) return true;
+        }
+        return false;
+    }
 
     void start() {
         if (isSessionActive()) return;
@@ -189,6 +204,7 @@ final class BackgroundBatchCoordinator {
         if (!stopping) return;
         stopping = false;
         if (success) sessionActive = false;
+        new RewardHistory(context).finish();
         report(message == null ? "后台停止未确认" : message);
         StopCallback callback = stopCallback;
         stopCallback = null;
