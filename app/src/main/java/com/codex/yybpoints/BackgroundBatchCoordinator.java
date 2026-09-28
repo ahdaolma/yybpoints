@@ -33,7 +33,7 @@ final class BackgroundBatchCoordinator {
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
-    private String status = "点击按钮后在隐藏显示启动应用宝并打开赚钱任务页";
+    private String status = "准备就绪，点击下方按钮开始观看任务";
     private boolean sessionActive;
     private boolean waiting;
     private boolean stopping;
@@ -75,6 +75,11 @@ final class BackgroundBatchCoordinator {
             }
             if (!SystemDisplayBridge.ACTION_RESULT.equals(action)
                     || senderUid != 1000) return;
+            if (intent.getIntExtra("requestId", -1) != generation) {
+                Log.i(TAG, "ignored stale display result operation="
+                        + intent.getStringExtra("operation"));
+                return;
+            }
             String operation = intent.getStringExtra("operation");
             if ("stop".equals(operation) && stopping) {
                 if (!intent.getBooleanExtra("success", false)) {
@@ -149,7 +154,7 @@ final class BackgroundBatchCoordinator {
         new RewardHistory(context).reset();
         report("正在创建后台显示并迁移应用宝任务栈…");
         sendVerifiedBroadcast(new Intent(SystemDisplayBridge.ACTION_START)
-                .setPackage("android"));
+                .setPackage("android").putExtra("requestId", generation));
         int token = generation;
         main.postDelayed(() -> pollHiddenDisplay(token, 0), 500L);
         main.postDelayed(() -> {
@@ -178,7 +183,8 @@ final class BackgroundBatchCoordinator {
         sendVerifiedBroadcast(new Intent(ControlBridge.ACTION_STOP).setPackage(TARGET));
         main.postDelayed(() -> {
             if (stopping && token == generation) sendVerifiedBroadcast(
-                    new Intent(SystemDisplayBridge.ACTION_STOP).setPackage("android"));
+                    new Intent(SystemDisplayBridge.ACTION_STOP).setPackage("android")
+                            .putExtra("requestId", token));
         }, 500L);
         main.postDelayed(() -> {
             if (stopping && token == generation) finishStop(false,

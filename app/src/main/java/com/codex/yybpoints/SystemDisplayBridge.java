@@ -13,14 +13,12 @@ import android.net.Uri;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.view.Display;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Log;
-import android.widget.Toast;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -31,7 +29,6 @@ final class SystemDisplayBridge {
     static final String ACTION_START = "com.codex.yybpoints.START_TRUSTED_DISPLAY";
     static final String ACTION_STOP = "com.codex.yybpoints.STOP_TRUSTED_DISPLAY";
     static final String ACTION_RESULT = "com.codex.yybpoints.TRUSTED_DISPLAY_RESULT";
-    static final String ACTION_TOAST = "com.codex.yybpoints.PHYSICAL_TOAST";
     private static final String MODULE = BuildConfig.APPLICATION_ID;
     private static final String TARGET = "com.tencent.android.qqdownloader";
     private static final String TAG = "YYBBackground";
@@ -62,7 +59,6 @@ final class SystemDisplayBridge {
                         IntentFilter filter = new IntentFilter();
                         filter.addAction(ACTION_START);
                         filter.addAction(ACTION_STOP);
-                        filter.addAction(ACTION_TOAST);
                         Commands commands = new Commands(context);
                         context.registerReceiver(commands, filter, Context.RECEIVER_EXPORTED);
                         IntentFilter removalFilter = new IntentFilter();
@@ -120,6 +116,7 @@ final class SystemDisplayBridge {
         Commands(Context context) { this.context = context; }
 
         @Override public void onReceive(Context ignored, Intent intent) {
+            int requestId = intent.getIntExtra("requestId", -1);
             try {
                 Log.i(TAG, "system command action=" + intent.getAction()
                         + " senderUid=" + getSentFromUid());
@@ -128,25 +125,10 @@ final class SystemDisplayBridge {
                     Log.w(TAG, "system command rejected; expectedUid=" + info.uid);
                     return;
                 }
-                if (ACTION_TOAST.equals(intent.getAction())) {
-                    String message = intent.getStringExtra("message");
-                    if (message != null && !message.isEmpty()) {
-                        DisplayManager displays = (DisplayManager) context.getSystemService(
-                                Context.DISPLAY_SERVICE);
-                        Display physical = displays == null ? null
-                                : displays.getDisplay(Display.DEFAULT_DISPLAY);
-                        if (physical != null) {
-                            Toast.makeText(context.createDisplayContext(physical),
-                                    message.substring(0, Math.min(message.length(), 100)),
-                                    Toast.LENGTH_SHORT).show();
-                            Log.i(TAG, "physical display toast requested display="
-                                    + physical.getDisplayId());
-                        } else Log.w(TAG, "physical display toast skipped: display unavailable");
-                    }
-                } else if (ACTION_STOP.equals(intent.getAction())) {
+                if (ACTION_STOP.equals(intent.getAction())) {
                     release();
                     forceStopTarget(context);
-                    sendResult(context, "stop", true, -1,
+                    sendResult(context, "stop", true, -1, requestId,
                             "后台显示已移除，应用宝进程已结束");
                 } else if (ACTION_START.equals(intent.getAction())) {
                     int displayId = create(context);
@@ -172,15 +154,14 @@ final class SystemDisplayBridge {
                         release();
                         throw new IllegalStateException(error);
                     }
-                    sendResult(context, "start", true, displayId,
+                    sendResult(context, "start", true, displayId, requestId,
                             "应用宝已在隐藏显示启动");
                 }
             } catch (Throwable error) {
                 XposedBridge.log("YYBBackground: command failed " + error.getClass().getSimpleName());
                 Log.e(TAG, "system command failed", error);
-                if (ACTION_TOAST.equals(intent.getAction())) return;
                 boolean stopping = ACTION_STOP.equals(intent.getAction());
-                sendResult(context, stopping ? "stop" : "start", false, -1,
+                sendResult(context, stopping ? "stop" : "start", false, -1, requestId,
                         (stopping ? "后台停止失败：" : "系统显示创建失败：")
                                 + error.getClass().getSimpleName());
             }
@@ -257,11 +238,12 @@ final class SystemDisplayBridge {
     }
 
     private static void sendResult(Context context, String operation, boolean success,
-                                   int displayId, String message) {
+                                   int displayId, int requestId, String message) {
         Intent result = new Intent(ACTION_RESULT).setPackage(MODULE);
         result.putExtra("operation", operation);
         result.putExtra("success", success);
         result.putExtra("displayId", displayId);
+        result.putExtra("requestId", requestId);
         result.putExtra("message", message);
         context.sendBroadcast(result, null, BroadcastOptions.makeBasic()
                 .setShareIdentityEnabled(true).toBundle());

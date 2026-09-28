@@ -20,17 +20,19 @@ public final class DailySchedule extends BroadcastReceiver {
 
     static final class Settings {
         final boolean enabled;
-        final boolean toast;
         final int hour;
         final int minute;
         final long nextAt;
+        final long lastRunAt;
+        final String lastResult;
 
         Settings(SharedPreferences prefs) {
             enabled = prefs.getBoolean("enabled", false);
-            toast = prefs.getBoolean("toast", true);
             hour = prefs.getInt("hour", 9);
             minute = prefs.getInt("minute", 0);
             nextAt = prefs.getLong("next_at", 0L);
+            lastRunAt = prefs.getLong("last_run_at", 0L);
+            lastResult = prefs.getString("last_result", "");
         }
     }
 
@@ -38,13 +40,25 @@ public final class DailySchedule extends BroadcastReceiver {
         return new Settings(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE));
     }
 
-    static void update(Context context, boolean enabled, int hour, int minute, boolean toast) {
+    static void update(Context context, boolean enabled, int hour, int minute) {
         if (hour < 0 || hour > 23 || minute < 0 || minute > 59)
             throw new IllegalArgumentException("Invalid local time");
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putBoolean("enabled", enabled).putInt("hour", hour)
-                .putInt("minute", minute).putBoolean("toast", toast).apply();
+                .putInt("minute", minute).apply();
         reschedule(context);
+    }
+
+    static void recordResult(Context context, String result) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putLong("last_run_at", System.currentTimeMillis())
+                .putString("last_result", result).apply();
+    }
+
+    static boolean needsExactAlarmPermission(Context context) {
+        if (Build.VERSION.SDK_INT < 31) return false;
+        AlarmManager manager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        return manager == null || !manager.canScheduleExactAlarms();
     }
 
     static void reschedule(Context context) {
@@ -66,15 +80,13 @@ public final class DailySchedule extends BroadcastReceiver {
                 next.add(Calendar.DAY_OF_YEAR, 1);
             nextAt = next.getTimeInMillis();
             try {
-                if (Build.VERSION.SDK_INT < 31 || manager.canScheduleExactAlarms()) {
-                    manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAt, pending);
-                } else {
-                    manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAt, pending);
-                    Log.w(TAG, "exact alarms unavailable; schedule may be delayed");
-                }
+                if (needsExactAlarmPermission(context)) {
+                    nextAt = 0;
+                    Log.w(TAG, "daily schedule pending exact alarm permission");
+                } else manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAt, pending);
             } catch (SecurityException denied) {
-                manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAt, pending);
-                Log.w(TAG, "exact alarm denied; using inexact alarm", denied);
+                nextAt = 0;
+                Log.w(TAG, "daily schedule pending exact alarm permission", denied);
             }
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

@@ -1,21 +1,33 @@
 package com.codex.yybpoints;
 
 import android.app.Activity;
+import android.animation.ValueAnimator;
+import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.app.TimePickerDialog;
+import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
+import android.os.SystemClock;
+import android.content.res.Configuration;
+import android.provider.Settings;
+import android.transition.AutoTransition;
+import android.transition.TransitionManager;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.util.List;
@@ -28,11 +40,16 @@ import java.util.Locale;
 /** Physical-screen controls and confirmed reward history for hidden video playback. */
 public final class ControlActivity extends Activity {
     private static final String TAG = "YYBBackground";
-    private static final int BACKGROUND = 0xFF0C1420;
-    private static final int CARD = 0xFF172535;
-    private static final int TEXT = 0xFFF2F6F5;
-    private static final int MUTED = 0xFFA9BCC3;
-    private static final int ACCENT = 0xFF63D7AD;
+    private int BACKGROUND;
+    private int CARD;
+    private int TEXT;
+    private int MUTED;
+    private int ACCENT;
+    private int ON_ACCENT;
+    private int TINT;
+    private int HERO;
+    private int DIVIDER;
+    private int RIPPLE;
 
     private TextView status;
     private TextView accountName;
@@ -44,10 +61,15 @@ public final class ControlActivity extends Activity {
     private TextView total;
     private TextView unresolved;
     private Button startButton;
+    private TextView stateTitle;
+    private long actionLockedUntil;
+    private boolean actionStarted;
     private Button scheduleTimeButton;
     private TextView scheduleNext;
-    private CheckBox scheduleEnabled;
-    private CheckBox scheduleToast;
+    private TextView scheduleLastLabel;
+    private TextView scheduleLastResult;
+    private View scheduleDivider;
+    private Switch scheduleEnabled;
     private LinearLayout summarySection;
     private LinearLayout history;
     private LinearLayout details;
@@ -59,40 +81,67 @@ public final class ControlActivity extends Activity {
     private boolean archiveExpanded;
     private BackgroundBatchCoordinator coordinator;
     private final BackgroundBatchCoordinator.Listener listener = message -> {
-        status.setText(message);
-        startButton.setEnabled(!coordinator.isSessionActive());
+        if (!message.contentEquals(status.getText())) {
+            status.setText(message);
+            animateChange(status);
+        }
+        renderAction();
         renderHistory();
         renderAccount();
     };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        BACKGROUND = getColor(R.color.page_background);
+        CARD = getColor(R.color.surface);
+        TEXT = getColor(R.color.text_primary);
+        MUTED = getColor(R.color.text_secondary);
+        ACCENT = getColor(R.color.accent);
+        ON_ACCENT = getColor(R.color.on_accent);
+        TINT = getColor(R.color.accent_tint);
+        HERO = getColor(R.color.result_surface);
+        DIVIDER = getColor(R.color.divider);
+        RIPPLE = getColor(R.color.touch_ripple);
+        if (getActionBar() != null) getActionBar().hide();
+        ScheduledBatchService.ensureNotificationChannels(this);
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
+        boolean dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+        getWindow().getDecorView().setSystemUiVisibility(dark ? 0
+                : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
 
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BACKGROUND);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
         scroll.setBackgroundColor(BACKGROUND);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(20), dp(28), dp(20), dp(28));
+        page.setFocusableInTouchMode(true);
+        page.requestFocus();
+        page.setPadding(dp(24), dp(24), dp(24), dp(24));
         scroll.addView(page);
 
-        page.addView(label("YYB  ·  LSPOSED", 12, ACCENT, true));
-        page.addView(label("应用宝后台任务", 27, TEXT, true), top(4));
-        page.addView(label("真实观看广告，领取结果以应用宝回执为准", 13, MUTED, false), top(7));
+        page.addView(label("应用宝积分", 28, TEXT, true));
+        page.addView(label("任务与积分记录", 14, MUTED, false), top(6));
 
-        LinearLayout accountCard = card();
+        LinearLayout accountCard = new LinearLayout(this);
         accountCard.setOrientation(LinearLayout.HORIZONTAL);
         accountCard.setGravity(Gravity.CENTER_VERTICAL);
-        page.addView(accountCard, top(24));
+        page.addView(accountCard, top(20));
         FrameLayout avatarBox = new FrameLayout(this);
-        accountCard.addView(avatarBox, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        accountCard.addView(avatarBox, new LinearLayout.LayoutParams(dp(44), dp(44)));
         avatar = new ImageView(this);
         GradientDrawable avatarBackground = new GradientDrawable();
         avatarBackground.setShape(GradientDrawable.OVAL);
-        avatarBackground.setColor(0xFF2A5C61);
+        avatarBackground.setColor(getColor(R.color.avatar_background));
         avatar.setBackground(avatarBackground);
+        avatar.setClipToOutline(true);
+        avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
         avatarBox.addView(avatar, new FrameLayout.LayoutParams(-1, -1));
         avatarInitial = label("?", 22, TEXT, true);
         avatarInitial.setGravity(Gravity.CENTER);
@@ -100,74 +149,120 @@ public final class ControlActivity extends Activity {
         LinearLayout accountText = new LinearLayout(this);
         accountText.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams accountTextParams = new LinearLayout.LayoutParams(0, -2, 1);
-        accountTextParams.leftMargin = dp(14);
+        accountTextParams.leftMargin = dp(11);
         accountCard.addView(accountText, accountTextParams);
         accountHint = label("当前账号", 12, MUTED, false);
         accountText.addView(accountHint);
-        accountName = label("等待识别", 17, TEXT, true);
-        accountText.addView(accountName, top(5));
+        accountName = label("等待识别", 16, TEXT, true);
+        accountText.addView(accountName, top(2));
 
-        LinearLayout statusCard = card();
-        page.addView(statusCard, top(12));
-        statusCard.addView(label("当前状态", 13, MUTED, true));
-        status = label("正在检查后台状态…", 16, TEXT, false);
-        status.setLineSpacing(dp(4), 1f);
-        statusCard.addView(status, top(10));
+        LinearLayout stats = card();
+        stats.setBackground(shape(HERO, dp(28)));
+        stats.setPadding(dp(22), dp(21), dp(22), dp(21));
+        page.addView(stats, top(24));
+        stateTitle = label("准备就绪", 20, TEXT, true);
+        stats.addView(stateTitle);
+        status = label("正在检查后台状态…", 13, MUTED, false);
+        status.setLineSpacing(dp(3), 1f);
+        stats.addView(status, top(8));
+        View statsDivider = new View(this);
+        statsDivider.setBackgroundColor(DIVIDER);
+        LinearLayout.LayoutParams statsDividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        statsDividerParams.topMargin = dp(20);
+        stats.addView(statsDivider, statsDividerParams);
+        LinearLayout statsRow = new LinearLayout(this);
+        statsRow.setOrientation(LinearLayout.HORIZONTAL);
+        statsRow.setGravity(Gravity.CENTER_VERTICAL);
+        stats.addView(statsRow, top(16));
+        LinearLayout pointsBlock = new LinearLayout(this);
+        pointsBlock.setOrientation(LinearLayout.VERTICAL);
+        pointsBlock.addView(label("本轮已核对积分", 12, MUTED, false));
+        total = label("0", 34, TEXT, true);
+        pointsBlock.addView(total);
+        statsRow.addView(pointsBlock, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout counts = new LinearLayout(this);
+        counts.setOrientation(LinearLayout.VERTICAL);
+        completed = label("已领奖 0 条", 14, TEXT, true);
+        counts.addView(completed);
+        unresolved = label("待核对 0 条", 12, MUTED, false);
+        counts.addView(unresolved, top(7));
+        statsRow.addView(counts);
 
-        LinearLayout stats = new LinearLayout(this);
-        stats.setOrientation(LinearLayout.HORIZONTAL);
-        page.addView(stats, top(12));
-        completed = addStat(stats, "已领奖", "0 条", 0);
-        total = addStat(stats, "已核对积分", "0", dp(8));
-        unresolved = addStat(stats, "金额待核对", "0 条", dp(8));
-
-        startButton = button("开始后台批量观看", ACCENT, BACKGROUND);
-        startButton.setOnClickListener(v -> coordinator.start());
-        page.addView(startButton, top(22));
-        Button stop = button("停止后台播放并还原", 0xFF2A4052, TEXT);
-        stop.setOnClickListener(v -> coordinator.stop());
-        page.addView(stop, top(10));
+        startButton = button("开始后台观看", ACCENT, ON_ACCENT);
+        startButton.setOnClickListener(v -> {
+            if (SystemClock.uptimeMillis() < actionLockedUntil) return;
+            actionStarted = !coordinator.isSessionActive();
+            actionLockedUntil = SystemClock.uptimeMillis() + 1500L;
+            if (!actionStarted) coordinator.stop();
+            else coordinator.start();
+            renderAction();
+            startButton.postDelayed(this::renderAction, 1550L);
+        });
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(dp(24), dp(12), dp(24), dp(16));
+        actions.setBackgroundColor(BACKGROUND);
+        LinearLayout.LayoutParams startParams = new LinearLayout.LayoutParams(-1, dp(56));
+        actions.addView(startButton, startParams);
+        root.addView(actions);
 
         LinearLayout scheduleCard = card();
-        page.addView(scheduleCard, top(20));
-        scheduleCard.addView(label("每天定时后台观看", 18, TEXT, true));
-        scheduleCard.addView(label("到点唤醒应用宝；完成后停止视频并清除隐藏显示",
-                12, MUTED, false), top(6));
+        page.addView(label("自动化", 13, MUTED, true), top(28));
+        page.addView(scheduleCard, top(10));
+        LinearLayout scheduleHeader = new LinearLayout(this);
+        scheduleHeader.setOrientation(LinearLayout.HORIZONTAL);
+        scheduleHeader.setGravity(Gravity.CENTER_VERTICAL);
+        scheduleCard.addView(scheduleHeader);
+        LinearLayout scheduleTitle = new LinearLayout(this);
+        scheduleTitle.setOrientation(LinearLayout.VERTICAL);
+        scheduleTitle.addView(label("每日定时", 17, TEXT, true));
+        scheduleTitle.addView(label("每天按设定时间运行", 12, MUTED, false), top(3));
+        scheduleHeader.addView(scheduleTitle, new LinearLayout.LayoutParams(0, -2, 1));
         DailySchedule.Settings schedule = DailySchedule.read(this);
-        scheduleEnabled = new CheckBox(this);
-        scheduleEnabled.setText("启用每日定时任务");
-        scheduleEnabled.setTextColor(TEXT);
+        scheduleEnabled = new Switch(this);
+        scheduleEnabled.setContentDescription("启用每日定时任务");
+        int[][] switchStates = {new int[] {android.R.attr.state_checked}, new int[] {}};
+        scheduleEnabled.setThumbTintList(new ColorStateList(switchStates,
+                new int[] {ACCENT, getColor(R.color.switch_off_thumb)}));
+        scheduleEnabled.setTrackTintList(new ColorStateList(switchStates,
+                new int[] {getColor(R.color.switch_on_track),
+                        getColor(R.color.switch_off_track)}));
         scheduleEnabled.setChecked(schedule.enabled);
-        scheduleCard.addView(scheduleEnabled, top(12));
-        scheduleTimeButton = button("", 0xFF2A4052, TEXT);
+        scheduleHeader.addView(scheduleEnabled);
+        scheduleTimeButton = button("", TINT, ACCENT);
         scheduleTimeButton.setOnClickListener(v -> {
             DailySchedule.Settings current = DailySchedule.read(this);
             new TimePickerDialog(this, (picker, hour, minute) -> {
-                DailySchedule.update(this, scheduleEnabled.isChecked(), hour, minute,
-                        scheduleToast.isChecked());
+                DailySchedule.update(this, scheduleEnabled.isChecked(), hour, minute);
                 renderSchedule();
             }, current.hour, current.minute, true).show();
         });
-        scheduleCard.addView(scheduleTimeButton, top(8));
-        scheduleToast = new CheckBox(this);
-        scheduleToast.setText("在主屏幕显示开始和结束提示");
-        scheduleToast.setTextColor(TEXT);
-        scheduleToast.setChecked(schedule.toast);
-        scheduleCard.addView(scheduleToast, top(8));
+        scheduleCard.addView(scheduleTimeButton, top(16));
         scheduleNext = label("", 12, MUTED, false);
         scheduleCard.addView(scheduleNext, top(8));
+        scheduleDivider = new View(this);
+        scheduleDivider.setBackgroundColor(DIVIDER);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        dividerParams.topMargin = dp(16);
+        scheduleCard.addView(scheduleDivider, dividerParams);
+        scheduleLastLabel = label("", 12, MUTED, false);
+        scheduleCard.addView(scheduleLastLabel, top(14));
+        scheduleLastResult = label("", 13, TEXT, false);
+        scheduleLastResult.setLineSpacing(dp(3), 1f);
+        scheduleCard.addView(scheduleLastResult, top(5));
         scheduleEnabled.setOnCheckedChangeListener((view, enabled) -> saveSchedule());
-        scheduleToast.setOnCheckedChangeListener((view, enabled) -> saveSchedule());
         renderSchedule();
 
         summarySection = new LinearLayout(this);
         summarySection.setOrientation(LinearLayout.VERTICAL);
-        page.addView(summarySection, top(28));
+        page.addView(summarySection, top(26));
         summarySection.addView(label("本轮任务总结", 18, TEXT, true));
         history = card();
         summarySection.addView(history, top(12));
-        detailsButton = button("查看逐条已核对积分", 0xFF2A4052, TEXT);
+        detailsButton = button("查看逐条已核对积分", CARD, ACCENT);
         detailsButton.setOnClickListener(v -> {
+            if (motionEnabled()) TransitionManager.beginDelayedTransition(summarySection,
+                    new AutoTransition().setDuration(200));
             detailsExpanded = !detailsExpanded;
             renderHistory();
         });
@@ -178,8 +273,10 @@ public final class ControlActivity extends Activity {
         archiveSection = new LinearLayout(this);
         archiveSection.setOrientation(LinearLayout.VERTICAL);
         page.addView(archiveSection, top(18));
-        archiveButton = button("历史任务记录", 0xFF2A4052, TEXT);
+        archiveButton = button("历史任务记录", CARD, ACCENT);
         archiveButton.setOnClickListener(v -> {
+            if (motionEnabled()) TransitionManager.beginDelayedTransition(archiveSection,
+                    new AutoTransition().setDuration(200));
             archiveExpanded = !archiveExpanded;
             renderHistory();
         });
@@ -188,7 +285,8 @@ public final class ControlActivity extends Activity {
         archiveHistory.setOrientation(LinearLayout.VERTICAL);
         archiveSection.addView(archiveHistory, top(10));
 
-        Button uninstall = button("清理并卸载模块", 0xFF302535, 0xFFFFC7C7);
+        Button uninstall = button("清理并卸载模块", BACKGROUND,
+                getColor(R.color.destructive_text));
         uninstall.setOnClickListener(v -> {
             uninstall.setEnabled(false);
             if (!coordinator.isSessionActive() && !coordinator.hasHiddenDisplay()) {
@@ -204,9 +302,29 @@ public final class ControlActivity extends Activity {
         page.addView(label("卸载前会结束视频、移除隐藏显示和应用宝进程。",
                 12, MUTED, false), top(8));
 
-        setContentView(scroll);
+        setContentView(root);
         coordinator = BackgroundBatchCoordinator.get(this);
         coordinator.addListener(listener);
+        scroll.post(() -> {
+            if (!requestNotificationPermissionOnFirstLaunch()) requestExactAlarmAccess(false);
+        });
+    }
+
+    private void renderAction() {
+        boolean active = coordinator.isSessionActive();
+        boolean locked = SystemClock.uptimeMillis() < actionLockedUntil;
+        String title = active ? "任务进行中" : coordinator.rewardsFinished() ? "本轮已结束" : "准备就绪";
+        if (!title.contentEquals(stateTitle.getText())) {
+            stateTitle.setText(title);
+            animateChange(stateTitle);
+        }
+        String action = locked ? actionStarted ? "正在启动…" : "正在清理…"
+                : active ? "停止并还原" : "开始后台观看";
+        startButton.setEnabled(!locked);
+        if (!action.contentEquals(startButton.getText())) {
+            startButton.setText(action);
+            animateChange(startButton);
+        }
     }
 
     private void openSystemUninstall(Button uninstall) {
@@ -224,9 +342,13 @@ public final class ControlActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (coordinator != null) {
+            DailySchedule.Settings schedule = DailySchedule.read(this);
+            if (schedule.enabled && schedule.nextAt == 0
+                    && !DailySchedule.needsExactAlarmPermission(this)) DailySchedule.reschedule(this);
             renderHistory();
             renderAccount();
             renderSchedule();
+            renderAction();
         }
     }
 
@@ -235,11 +357,43 @@ public final class ControlActivity extends Activity {
         super.onDestroy();
     }
 
+    private boolean requestNotificationPermissionOnFirstLaunch() {
+        if (Build.VERSION.SDK_INT < 33 || isFinishing() || isDestroyed()
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                    == PackageManager.PERMISSION_GRANTED) return false;
+        android.content.SharedPreferences prefs = getSharedPreferences("permission_prompt", MODE_PRIVATE);
+        if (prefs.getBoolean("notification_requested", false)) return false;
+        prefs.edit().putBoolean("notification_requested", true).apply();
+        requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 1);
+        return true;
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 1) requestExactAlarmAccess(false);
+    }
+
+    private void requestExactAlarmAccess(boolean userInitiated) {
+        if (!DailySchedule.read(this).enabled || !DailySchedule.needsExactAlarmPermission(this)
+                || isFinishing() || isDestroyed()) return;
+        android.content.SharedPreferences prefs = getSharedPreferences("permission_prompt", MODE_PRIVATE);
+        if (!userInitiated && prefs.getBoolean("exact_alarm_requested", false)) return;
+        prefs.edit().putBoolean("exact_alarm_requested", true).apply();
+        try {
+            startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException error) {
+            Log.e(TAG, "exact alarm settings unavailable", error);
+            status.setText("系统精确闹钟授权界面不可用，定时任务尚未启动");
+        }
+    }
+
     private void saveSchedule() {
         DailySchedule.Settings current = DailySchedule.read(this);
-        DailySchedule.update(this, scheduleEnabled.isChecked(), current.hour, current.minute,
-                scheduleToast.isChecked());
+        DailySchedule.update(this, scheduleEnabled.isChecked(), current.hour, current.minute);
         renderSchedule();
+        if (scheduleEnabled.isChecked()) requestExactAlarmAccess(true);
     }
 
     private void renderSchedule() {
@@ -249,7 +403,18 @@ public final class ControlActivity extends Activity {
         if (settings.enabled && settings.nextAt > 0) {
             scheduleNext.setText("下次运行：" + new SimpleDateFormat("yyyy-MM-dd HH:mm",
                     Locale.getDefault()).format(new Date(settings.nextAt)));
-        } else scheduleNext.setText("定时任务已关闭");
+        } else if (settings.enabled) scheduleNext.setText("等待系统精确闹钟授权；定时任务尚未启动");
+        else scheduleNext.setText("定时任务已关闭");
+        boolean hasLastRun = settings.lastRunAt > 0;
+        scheduleDivider.setVisibility(hasLastRun ? View.VISIBLE : View.GONE);
+        scheduleLastLabel.setVisibility(hasLastRun ? View.VISIBLE : View.GONE);
+        scheduleLastResult.setVisibility(hasLastRun ? View.VISIBLE : View.GONE);
+        if (hasLastRun) {
+            scheduleLastLabel.setText("上次运行  "
+                    + new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+                    .format(new Date(settings.lastRunAt)));
+            scheduleLastResult.setText(settings.lastResult);
+        }
     }
 
     private void renderHistory() {
@@ -344,9 +509,13 @@ public final class ControlActivity extends Activity {
                         ACCENT, false), top(6));
             }
         }
-        completed.setText(entries.size() + " 条");
-        total.setText(String.valueOf(sum));
-        unresolved.setText(unknown + " 条");
+        completed.setText("已领奖 " + entries.size() + " 条");
+        String sumText = String.valueOf(sum);
+        if (!sumText.contentEquals(total.getText())) {
+            total.setText(sumText);
+            animateChange(total);
+        }
+        unresolved.setText("待核对 " + unknown + " 条");
     }
 
     private void renderAccount() {
@@ -360,7 +529,7 @@ public final class ControlActivity extends Activity {
             accountName.setText("未登录 · 请先登录应用宝");
             avatarInitial.setText("?");
         } else {
-            accountHint.setText("最近识别的应用宝账号");
+            accountHint.setText("最近识别的账号");
             String name = profile.nickname.isEmpty() ? "已登录" : profile.nickname;
             accountName.setText(name);
             avatarInitial.setText(name.substring(0, 1));
@@ -377,22 +546,11 @@ public final class ControlActivity extends Activity {
         }
     }
 
-    private TextView addStat(LinearLayout parent, String name, String value, int leftMargin) {
-        LinearLayout block = card();
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(88), 1);
-        params.leftMargin = leftMargin;
-        parent.addView(block, params);
-        block.addView(label(name, 11, MUTED, false));
-        TextView number = label(value, 18, TEXT, true);
-        block.addView(number, top(10));
-        return number;
-    }
-
     private LinearLayout card() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
-        card.setBackground(shape(CARD, dp(16)));
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setBackground(shape(CARD, dp(24)));
         return card;
     }
 
@@ -402,8 +560,23 @@ public final class ControlActivity extends Activity {
         button.setText(text);
         button.setTextSize(15);
         button.setTextColor(foreground);
-        button.setBackground(shape(fill, dp(14)));
+        button.setBackground(ripple(shape(fill, dp(28))));
+        button.setPadding(dp(16), dp(8), dp(16), dp(8));
         button.setMinHeight(dp(54));
+        button.setElevation(0);
+        button.setStateListAnimator(null);
+        button.setOnTouchListener((view, event) -> {
+            if (!motionEnabled()) return false;
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                view.animate().cancel();
+                view.animate().scaleX(0.985f).scaleY(0.985f).setDuration(90).start();
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                view.animate().cancel();
+                view.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+            }
+            return false;
+        });
         return button;
     }
 
@@ -421,6 +594,31 @@ public final class ControlActivity extends Activity {
         drawable.setColor(fill);
         drawable.setCornerRadius(radius);
         return drawable;
+    }
+
+    private GradientDrawable outline(int fill, int stroke, int radius) {
+        GradientDrawable drawable = shape(fill, radius);
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
+    }
+
+    private RippleDrawable ripple(GradientDrawable drawable) {
+        return new RippleDrawable(ColorStateList.valueOf(RIPPLE), drawable,
+                shape(0xFFFFFFFF, dp(28)));
+    }
+
+    private boolean motionEnabled() {
+        return Build.VERSION.SDK_INT < 26 || ValueAnimator.areAnimatorsEnabled();
+    }
+
+    private void animateChange(View view) {
+        view.animate().cancel();
+        if (!motionEnabled()) {
+            view.setAlpha(1f);
+            return;
+        }
+        view.setAlpha(0.55f);
+        view.animate().alpha(1f).setDuration(180).start();
     }
 
     private LinearLayout.LayoutParams top(int margin) {

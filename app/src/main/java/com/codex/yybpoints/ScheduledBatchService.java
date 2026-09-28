@@ -3,9 +3,10 @@ package com.codex.yybpoints;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
-import android.app.BroadcastOptions;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -18,6 +19,7 @@ import java.util.List;
 public final class ScheduledBatchService extends Service {
     private static final String TAG = "YYBSchedule";
     private static final String CHANNEL = "yyb_scheduled_batch";
+    private static final String RESULT_CHANNEL = "yyb_scheduled_result";
     private static final long RUN_LIMIT_MS = 42 * 60_000L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private BackgroundBatchCoordinator coordinator;
@@ -46,16 +48,22 @@ public final class ScheduledBatchService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         coordinator = BackgroundBatchCoordinator.get(this);
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (Build.VERSION.SDK_INT >= 26) {
-            manager.createNotificationChannel(new NotificationChannel(CHANNEL,
-                    "应用宝定时任务", NotificationManager.IMPORTANCE_LOW));
-        }
+        ensureNotificationChannels(this);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         startForeground(81, builder.setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle("应用宝后台任务")
                 .setContentText("定时观看进行中").setOngoing(true).build());
+    }
+
+    static void ensureNotificationChannels(Context context) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager manager = (NotificationManager) context.getSystemService(NOTIFICATION_SERVICE);
+            manager.createNotificationChannel(new NotificationChannel(CHANNEL,
+                    "应用宝定时任务", NotificationManager.IMPORTANCE_LOW));
+            manager.createNotificationChannel(new NotificationChannel(RESULT_CHANNEL,
+                    "应用宝任务结果", NotificationManager.IMPORTANCE_LOW));
+        }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -84,7 +92,6 @@ public final class ScheduledBatchService extends Service {
         coordinator.start();
         coordinator.addListener(listener);
         if (coordinator.isSessionActive()) {
-            showPhysicalToast("应用宝定时后台任务已开始");
             main.postDelayed(timeout, RUN_LIMIT_MS);
         }
     }
@@ -95,24 +102,38 @@ public final class ScheduledBatchService extends Service {
         main.removeCallbacks(timeout);
         coordinator.removeListener(listener);
         List<RewardHistory.Entry> entries = coordinator.rewards();
-        if (entries.isEmpty()) showPhysicalToast("应用宝定时任务结束：" + message);
+        String result;
+        if (entries.isEmpty()) result = message.startsWith("后台视频已停止")
+                ? "本轮 0 条任务，后台资源已清理" : "本轮 0 条：" + message;
         else {
             int points = 0;
             for (RewardHistory.Entry entry : entries) if (entry.points > 0) points += entry.points;
-            showPhysicalToast("应用宝定时任务完成 " + entries.size() + " 条，已核对 "
-                    + points + " 积分");
+            result = "完成 " + entries.size() + " 条，已核对 " + points + " 积分";
         }
+        DailySchedule.recordResult(this, result);
+        postResultNotification(result);
         Log.i(TAG, "scheduled run finished claims=" + entries.size() + " status=" + message);
         stopSelf();
     }
 
-    private void showPhysicalToast(String message) {
-        if (!DailySchedule.read(this).toast) return;
-        // The system bridge uses display 0 and still works when Android suppresses
-        // background toasts from this app because its notifications are disabled.
-        sendBroadcast(new Intent(SystemDisplayBridge.ACTION_TOAST).setPackage("android")
-                .putExtra("message", message), null, BroadcastOptions.makeBasic()
-                .setShareIdentityEnabled(true).toBundle());
+    private void postResultNotification(String message) {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled()) {
+            Log.w(TAG, "result notification suppressed: app notifications disabled");
+            return;
+        }
+        PendingIntent open = PendingIntent.getActivity(this, 82,
+                new Intent(this, ControlActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, RESULT_CHANNEL) : new Notification.Builder(this);
+        manager.notify(82, builder.setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("应用宝后台任务已结束")
+                .setContentText(message)
+                .setContentIntent(open)
+                .setAutoCancel(true).build());
+        Log.i(TAG, "result notification posted");
     }
 
     @Override public void onDestroy() {

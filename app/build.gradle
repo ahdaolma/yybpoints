@@ -18,7 +18,7 @@ android {
     defaultConfig {
         applicationId 'io.github.ahdaolma.yybpoints'
         minSdk 23
-        targetSdk 28
+        targetSdk 33
         versionCode 6
         versionName '0.3.0'
     }
@@ -26,12 +26,6 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
-    }
-
-    lint {
-        // This LSPosed module is sideloaded; changing targetSdk also changes its
-        // broadcast behavior and requires separate device validation.
-        disable 'ExpiredTargetSdkVersion'
     }
 
     signingConfigs {
