@@ -12,6 +12,8 @@ import android.util.Log;
 import android.view.Display;
 
 import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /** One start/stop path for the physical controller and the headless ADB probe. */
 final class BackgroundBatchCoordinator {
@@ -30,12 +32,14 @@ final class BackgroundBatchCoordinator {
 
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private Listener listener;
+    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private String status = "点击按钮后在隐藏显示启动应用宝并打开赚钱任务页";
     private boolean sessionActive;
     private boolean waiting;
     private boolean stopping;
-    private StopCallback stopCallback;
+    private boolean stopFailed;
+    private final CopyOnWriteArrayList<StopCallback> stopCallbacks =
+            new CopyOnWriteArrayList<>();
     private int generation;
 
     private final BroadcastReceiver resultReceiver = new BroadcastReceiver() {
@@ -66,7 +70,7 @@ final class BackgroundBatchCoordinator {
                         });
                     }
                 }
-                else if (listener != null) listener.onStatus(status);
+                else notifyListeners(status);
                 return;
             }
             if (!SystemDisplayBridge.ACTION_RESULT.equals(action)
@@ -83,10 +87,8 @@ final class BackgroundBatchCoordinator {
             if (!"start".equals(operation) || !waiting) return;
             int displayId = intent.getIntExtra("displayId", -1);
             if (displayId < 0) {
-                waiting = false;
-                sessionActive = false;
                 String message = intent.getStringExtra("message");
-                report(message == null ? "后台显示未启动" : message);
+                stop(success -> report(message == null ? "后台显示未启动" : message));
             } else {
                 startBatchOnDisplay(displayId);
             }
@@ -101,14 +103,12 @@ final class BackgroundBatchCoordinator {
         context.registerReceiver(resultReceiver, filter, Context.RECEIVER_EXPORTED);
     }
 
-    void setListener(Listener value) {
-        listener = value;
+    void addListener(Listener value) {
+        listeners.addIfAbsent(value);
         value.onStatus(status);
     }
 
-    void clearListener(Listener value) {
-        if (listener == value) listener = null;
-    }
+    void removeListener(Listener value) { listeners.remove(value); }
 
     List<RewardHistory.Entry> rewards() { return new RewardHistory(context).snapshot(); }
 
@@ -121,6 +121,8 @@ final class BackgroundBatchCoordinator {
     AccountProfileStore.Profile account() { return new AccountProfileStore(context).read(); }
 
     boolean isSessionActive() { return sessionActive || waiting || stopping; }
+
+    boolean stopFailed() { return stopFailed; }
 
     boolean hasHiddenDisplay() {
         DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
@@ -141,6 +143,7 @@ final class BackgroundBatchCoordinator {
             }
         }
         generation++;
+        stopFailed = false;
         sessionActive = true;
         waiting = true;
         new RewardHistory(context).reset();
@@ -151,9 +154,7 @@ final class BackgroundBatchCoordinator {
         main.postDelayed(() -> pollHiddenDisplay(token, 0), 500L);
         main.postDelayed(() -> {
             if (waiting && token == generation) {
-                waiting = false;
-                sessionActive = false;
-                report("未收到系统框架响应；检查 LSPosed 系统框架作用域");
+                stop(success -> report("未收到系统框架响应；检查 LSPosed 系统框架作用域"));
             }
         }, 8_000L);
     }
@@ -164,13 +165,14 @@ final class BackgroundBatchCoordinator {
 
     void stop(StopCallback callback) {
         if (stopping) {
-            if (callback != null) callback.onComplete(false);
+            if (callback != null) stopCallbacks.add(callback);
             return;
         }
+        if (callback != null) stopCallbacks.add(callback);
         generation++;
         waiting = false;
         stopping = true;
-        stopCallback = callback;
+        stopFailed = false;
         int token = generation;
         report("正在停止视频、移除后台显示并结束应用宝进程…");
         sendVerifiedBroadcast(new Intent(ControlBridge.ACTION_STOP).setPackage(TARGET));
@@ -203,12 +205,13 @@ final class BackgroundBatchCoordinator {
     private void finishStop(boolean success, String message) {
         if (!stopping) return;
         stopping = false;
+        stopFailed = !success;
         if (success) sessionActive = false;
         new RewardHistory(context).finish();
         report(message == null ? "后台停止未确认" : message);
-        StopCallback callback = stopCallback;
-        stopCallback = null;
-        if (callback != null) callback.onComplete(success);
+        List<StopCallback> completedCallbacks = new ArrayList<>(stopCallbacks);
+        stopCallbacks.clear();
+        for (StopCallback callback : completedCallbacks) callback.onComplete(success);
     }
 
     private void pollHiddenDisplay(int token, int attempt) {
@@ -248,6 +251,10 @@ final class BackgroundBatchCoordinator {
     private void report(String message) {
         status = message;
         Log.i(TAG, "controller status=" + message);
-        if (listener != null) listener.onStatus(message);
+        notifyListeners(message);
+    }
+
+    private void notifyListeners(String message) {
+        for (Listener listener : listeners) listener.onStatus(message);
     }
 }

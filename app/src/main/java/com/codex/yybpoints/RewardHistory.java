@@ -23,6 +23,18 @@ final class RewardHistory {
         }
     }
 
+    static final class Run {
+        final long startedAt;
+        final long finishedAt;
+        final List<Entry> entries;
+
+        Run(long startedAt, long finishedAt, List<Entry> entries) {
+            this.startedAt = startedAt;
+            this.finishedAt = finishedAt;
+            this.entries = entries;
+        }
+    }
+
     private final SharedPreferences preferences;
     private final List<Entry> entries = new ArrayList<>();
 
@@ -48,9 +60,11 @@ final class RewardHistory {
     }
 
     synchronized void finish() {
-        if (!entries.isEmpty() && !isFinished()) preferences.edit()
-                .putBoolean("finished", true)
-                .putLong("finished_at", System.currentTimeMillis()).apply();
+        if (!entries.isEmpty() && !isFinished()) {
+            preferences.edit().putBoolean("finished", true)
+                    .putLong("finished_at", System.currentTimeMillis()).apply();
+            archive();
+        }
     }
 
     boolean isFinished() { return preferences.getBoolean("finished", false); }
@@ -77,7 +91,53 @@ final class RewardHistory {
 
     synchronized List<Entry> snapshot() { return new ArrayList<>(entries); }
 
+    synchronized List<Run> archiveSnapshot() {
+        List<Run> runs = new ArrayList<>();
+        try {
+            JSONArray stored = new JSONArray(preferences.getString("archive_runs", "[]"));
+            for (int i = stored.length() - 1; i >= 0; i--) {
+                JSONObject item = stored.optJSONObject(i);
+                if (item == null) continue;
+                List<Entry> items = new ArrayList<>();
+                JSONArray claims = item.optJSONArray("entries");
+                if (claims != null) for (int j = 0; j < claims.length(); j++) {
+                    JSONObject claim = claims.optJSONObject(j);
+                    if (claim != null) items.add(new Entry(claim.optInt("sequence"),
+                            claim.optString("taskId"), claim.optInt("points", -1)));
+                }
+                runs.add(new Run(item.optLong("startedAt"), item.optLong("finishedAt"), items));
+            }
+        } catch (Throwable ignored) { runs.clear(); }
+        return runs;
+    }
+
+    private void archive() {
+        long startedAt = startedAt();
+        long finishedAt = finishedAt();
+        if (startedAt <= 0 || finishedAt < startedAt || entries.isEmpty()) return;
+        try {
+            JSONArray old = new JSONArray(preferences.getString("archive_runs", "[]"));
+            JSONArray updated = new JSONArray();
+            int first = Math.max(0, old.length() - 13);
+            for (int i = first; i < old.length(); i++) {
+                JSONObject item = old.optJSONObject(i);
+                if (item != null && item.optLong("startedAt") != startedAt) updated.put(item);
+            }
+            JSONObject run = new JSONObject();
+            run.put("startedAt", startedAt);
+            run.put("finishedAt", finishedAt);
+            run.put("entries", serializeEntries());
+            updated.put(run);
+            preferences.edit().putString("archive_runs", updated.toString()).apply();
+        } catch (Throwable ignored) { }
+    }
+
     private void persist() {
+        preferences.edit().putString("current_run", serializeEntries().toString()).apply();
+        if (isFinished()) archive();
+    }
+
+    private JSONArray serializeEntries() {
         JSONArray saved = new JSONArray();
         for (Entry entry : entries) {
             JSONObject item = new JSONObject();
@@ -88,6 +148,6 @@ final class RewardHistory {
                 saved.put(item);
             } catch (Throwable ignored) { }
         }
-        preferences.edit().putString("current_run", saved.toString()).apply();
+        return saved;
     }
 }

@@ -32,6 +32,7 @@ final class ControlBridge {
     private static boolean registered;
     private static boolean preparing;
     private static int prepareGeneration;
+    private static String lastNavigationState = "尚未尝试";
 
     private ControlBridge() { }
 
@@ -139,11 +140,12 @@ final class ControlBridge {
             publish("已通过应用宝接口开始真实视频任务");
             return;
         }
-        if (attempt == 0 || attempt % 5 == 0) openEarningsTab();
-        if (attempt >= 20) {
+        if (activity.getClass().getName().endsWith(".MainActivity")
+                && (attempt == 0 || attempt % 8 == 0)) openEarningsTab();
+        if (attempt >= 100) {
             preparing = false;
             publish(loginPromptVisible() ? "应用宝未登录：请先打开应用宝登录账号"
-                    : "应用宝赚钱任务页未能加载");
+                    : "应用宝赚钱任务页未能加载（" + lastNavigationState + "）");
             return;
         }
         MAIN.postDelayed(() -> startWhenReady(generation, attempt + 1), 750L);
@@ -151,12 +153,18 @@ final class ControlBridge {
 
     private static void openEarningsTab() {
         Activity activity = mainActivity.get();
-        if (activity == null || activity.isFinishing()) return;
+        if (activity == null || activity.isFinishing()) {
+            lastNavigationState = "主页尚未就绪";
+            return;
+        }
         try {
             Object wrapper = XposedHelpers.getObjectField(activity, "E");
             Object tabs = XposedHelpers.getObjectField(wrapper, "i");
             Object widget = XposedHelpers.getObjectField(wrapper, "b");
-            if (!(tabs instanceof List) || widget == null) return;
+            if (!(tabs instanceof List) || widget == null) {
+                lastNavigationState = "主页标签尚未加载";
+                return;
+            }
             List<?> list = (List<?>) tabs;
             for (int index = 0; index < list.size(); index++) {
                 Object tab = list.get(index);
@@ -164,11 +172,14 @@ final class ControlBridge {
                 if (name == null || !name.contains("赚钱")) continue;
                 Object listener = XposedHelpers.getObjectField(widget, "d");
                 XposedHelpers.callMethod(listener, "onTabSelectionChanged", index, true);
+                lastNavigationState = "已进入赚钱标签";
                 HookEntry.record("background control selected native earnings tab index=" + index);
                 return;
             }
+            lastNavigationState = "赚钱标签未出现，标签数=" + list.size();
             HookEntry.record("background control earnings tab absent, count=" + list.size());
         } catch (Throwable error) {
+            lastNavigationState = "导航失败：" + error.getClass().getSimpleName();
             HookEntry.record("background control earnings navigation failed="
                     + error.getClass().getSimpleName());
         }
@@ -207,6 +218,7 @@ final class ControlBridge {
                     }
                     if (!VideoBatchController.isRunning() && !preparing) {
                         preparing = true;
+                        lastNavigationState = "尚未尝试";
                         int generation = ++prepareGeneration;
                         startWhenReady(generation, 0);
                     }

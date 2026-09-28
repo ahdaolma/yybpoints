@@ -13,11 +13,14 @@ import android.net.Uri;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.view.Display;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.util.Log;
+import android.widget.Toast;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -28,6 +31,7 @@ final class SystemDisplayBridge {
     static final String ACTION_START = "com.codex.yybpoints.START_TRUSTED_DISPLAY";
     static final String ACTION_STOP = "com.codex.yybpoints.STOP_TRUSTED_DISPLAY";
     static final String ACTION_RESULT = "com.codex.yybpoints.TRUSTED_DISPLAY_RESULT";
+    static final String ACTION_TOAST = "com.codex.yybpoints.PHYSICAL_TOAST";
     private static final String MODULE = BuildConfig.APPLICATION_ID;
     private static final String TARGET = "com.tencent.android.qqdownloader";
     private static final String TAG = "YYBBackground";
@@ -38,6 +42,9 @@ final class SystemDisplayBridge {
     private static VirtualDisplay display;
     private static ImageReader reader;
     private static HandlerThread drainThread;
+    private static Handler cleanup;
+    private static final long MAX_DISPLAY_LIFETIME_MS = 45 * 60_000L;
+    private static Runnable expiry;
     private static boolean installed;
 
     private SystemDisplayBridge() { }
@@ -55,6 +62,7 @@ final class SystemDisplayBridge {
                         IntentFilter filter = new IntentFilter();
                         filter.addAction(ACTION_START);
                         filter.addAction(ACTION_STOP);
+                        filter.addAction(ACTION_TOAST);
                         Commands commands = new Commands(context);
                         context.registerReceiver(commands, filter, Context.RECEIVER_EXPORTED);
                         IntentFilter removalFilter = new IntentFilter();
@@ -120,7 +128,22 @@ final class SystemDisplayBridge {
                     Log.w(TAG, "system command rejected; expectedUid=" + info.uid);
                     return;
                 }
-                if (ACTION_STOP.equals(intent.getAction())) {
+                if (ACTION_TOAST.equals(intent.getAction())) {
+                    String message = intent.getStringExtra("message");
+                    if (message != null && !message.isEmpty()) {
+                        DisplayManager displays = (DisplayManager) context.getSystemService(
+                                Context.DISPLAY_SERVICE);
+                        Display physical = displays == null ? null
+                                : displays.getDisplay(Display.DEFAULT_DISPLAY);
+                        if (physical != null) {
+                            Toast.makeText(context.createDisplayContext(physical),
+                                    message.substring(0, Math.min(message.length(), 100)),
+                                    Toast.LENGTH_SHORT).show();
+                            Log.i(TAG, "physical display toast requested display="
+                                    + physical.getDisplayId());
+                        } else Log.w(TAG, "physical display toast skipped: display unavailable");
+                    }
+                } else if (ACTION_STOP.equals(intent.getAction())) {
                     release();
                     forceStopTarget(context);
                     sendResult(context, "stop", true, -1,
@@ -155,6 +178,7 @@ final class SystemDisplayBridge {
             } catch (Throwable error) {
                 XposedBridge.log("YYBBackground: command failed " + error.getClass().getSimpleName());
                 Log.e(TAG, "system command failed", error);
+                if (ACTION_TOAST.equals(intent.getAction())) return;
                 boolean stopping = ACTION_STOP.equals(intent.getAction());
                 sendResult(context, stopping ? "stop" : "start", false, -1,
                         (stopping ? "后台停止失败：" : "系统显示创建失败：")
@@ -217,6 +241,16 @@ final class SystemDisplayBridge {
             throw new IllegalStateException("display unavailable");
         }
         int displayId = display.getDisplay().getDisplayId();
+        if (cleanup == null) cleanup = new Handler(Looper.getMainLooper());
+        expiry = () -> {
+            if (display == null || display.getDisplay() == null
+                    || display.getDisplay().getDisplayId() != displayId) return;
+            Log.w(TAG, "hidden display expired; forcing cleanup id=" + displayId);
+            release();
+            try { forceStopTarget(context); }
+            catch (Throwable error) { Log.w(TAG, "expiry process cleanup failed", error); }
+        };
+        cleanup.postDelayed(expiry, MAX_DISPLAY_LIFETIME_MS);
         XposedBridge.log("YYBBackground: trusted display created id=" + displayId);
         Log.i(TAG, "trusted display created id=" + displayId);
         return displayId;
@@ -234,6 +268,10 @@ final class SystemDisplayBridge {
     }
 
     private static void release() {
+        if (expiry != null && cleanup != null) {
+            cleanup.removeCallbacks(expiry);
+            expiry = null;
+        }
         if (display != null) { display.release(); display = null; }
         if (reader != null) { reader.close(); reader = null; }
         if (drainThread != null) { drainThread.quitSafely(); drainThread = null; }

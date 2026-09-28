@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <application android:label="应用宝后台任务" android:description="@string/module_description"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher">
         <activity android:name=".ControlActivity" android:exported="true" android:label="应用宝后台控制">
@@ -14,6 +16,16 @@
                 <action android:name="com.codex.yybpoints.REAL_VIDEO_BATCH_STATUS" />
             </intent-filter>
         </receiver>
+        <receiver android:name=".DailySchedule" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".ScheduledBatchService" android:exported="false" />
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription" android:value="后台串行观看真实视频任务，确认到账后继续" />
         <meta-data android:name="xposedminversion" android:value="82" />

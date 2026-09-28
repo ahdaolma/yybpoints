@@ -3,6 +3,7 @@ package com.codex.yybpoints;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.app.TimePickerDialog;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -10,6 +11,7 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -42,11 +44,19 @@ public final class ControlActivity extends Activity {
     private TextView total;
     private TextView unresolved;
     private Button startButton;
+    private Button scheduleTimeButton;
+    private TextView scheduleNext;
+    private CheckBox scheduleEnabled;
+    private CheckBox scheduleToast;
     private LinearLayout summarySection;
     private LinearLayout history;
     private LinearLayout details;
     private Button detailsButton;
     private boolean detailsExpanded;
+    private LinearLayout archiveSection;
+    private LinearLayout archiveHistory;
+    private Button archiveButton;
+    private boolean archiveExpanded;
     private BackgroundBatchCoordinator coordinator;
     private final BackgroundBatchCoordinator.Listener listener = message -> {
         status.setText(message);
@@ -118,6 +128,38 @@ public final class ControlActivity extends Activity {
         stop.setOnClickListener(v -> coordinator.stop());
         page.addView(stop, top(10));
 
+        LinearLayout scheduleCard = card();
+        page.addView(scheduleCard, top(20));
+        scheduleCard.addView(label("每天定时后台观看", 18, TEXT, true));
+        scheduleCard.addView(label("到点唤醒应用宝；完成后停止视频并清除隐藏显示",
+                12, MUTED, false), top(6));
+        DailySchedule.Settings schedule = DailySchedule.read(this);
+        scheduleEnabled = new CheckBox(this);
+        scheduleEnabled.setText("启用每日定时任务");
+        scheduleEnabled.setTextColor(TEXT);
+        scheduleEnabled.setChecked(schedule.enabled);
+        scheduleCard.addView(scheduleEnabled, top(12));
+        scheduleTimeButton = button("", 0xFF2A4052, TEXT);
+        scheduleTimeButton.setOnClickListener(v -> {
+            DailySchedule.Settings current = DailySchedule.read(this);
+            new TimePickerDialog(this, (picker, hour, minute) -> {
+                DailySchedule.update(this, scheduleEnabled.isChecked(), hour, minute,
+                        scheduleToast.isChecked());
+                renderSchedule();
+            }, current.hour, current.minute, true).show();
+        });
+        scheduleCard.addView(scheduleTimeButton, top(8));
+        scheduleToast = new CheckBox(this);
+        scheduleToast.setText("在主屏幕显示开始和结束提示");
+        scheduleToast.setTextColor(TEXT);
+        scheduleToast.setChecked(schedule.toast);
+        scheduleCard.addView(scheduleToast, top(8));
+        scheduleNext = label("", 12, MUTED, false);
+        scheduleCard.addView(scheduleNext, top(8));
+        scheduleEnabled.setOnCheckedChangeListener((view, enabled) -> saveSchedule());
+        scheduleToast.setOnCheckedChangeListener((view, enabled) -> saveSchedule());
+        renderSchedule();
+
         summarySection = new LinearLayout(this);
         summarySection.setOrientation(LinearLayout.VERTICAL);
         page.addView(summarySection, top(28));
@@ -132,6 +174,19 @@ public final class ControlActivity extends Activity {
         summarySection.addView(detailsButton, top(10));
         details = card();
         summarySection.addView(details, top(10));
+
+        archiveSection = new LinearLayout(this);
+        archiveSection.setOrientation(LinearLayout.VERTICAL);
+        page.addView(archiveSection, top(18));
+        archiveButton = button("历史任务记录", 0xFF2A4052, TEXT);
+        archiveButton.setOnClickListener(v -> {
+            archiveExpanded = !archiveExpanded;
+            renderHistory();
+        });
+        archiveSection.addView(archiveButton);
+        archiveHistory = new LinearLayout(this);
+        archiveHistory.setOrientation(LinearLayout.VERTICAL);
+        archiveSection.addView(archiveHistory, top(10));
 
         Button uninstall = button("清理并卸载模块", 0xFF302535, 0xFFFFC7C7);
         uninstall.setOnClickListener(v -> {
@@ -151,7 +206,7 @@ public final class ControlActivity extends Activity {
 
         setContentView(scroll);
         coordinator = BackgroundBatchCoordinator.get(this);
-        coordinator.setListener(listener);
+        coordinator.addListener(listener);
     }
 
     private void openSystemUninstall(Button uninstall) {
@@ -171,12 +226,30 @@ public final class ControlActivity extends Activity {
         if (coordinator != null) {
             renderHistory();
             renderAccount();
+            renderSchedule();
         }
     }
 
     @Override protected void onDestroy() {
-        if (coordinator != null) coordinator.clearListener(listener);
+        if (coordinator != null) coordinator.removeListener(listener);
         super.onDestroy();
+    }
+
+    private void saveSchedule() {
+        DailySchedule.Settings current = DailySchedule.read(this);
+        DailySchedule.update(this, scheduleEnabled.isChecked(), current.hour, current.minute,
+                scheduleToast.isChecked());
+        renderSchedule();
+    }
+
+    private void renderSchedule() {
+        DailySchedule.Settings settings = DailySchedule.read(this);
+        scheduleTimeButton.setText(String.format(Locale.getDefault(), "开始时间  %02d:%02d",
+                settings.hour, settings.minute));
+        if (settings.enabled && settings.nextAt > 0) {
+            scheduleNext.setText("下次运行：" + new SimpleDateFormat("yyyy-MM-dd HH:mm",
+                    Locale.getDefault()).format(new Date(settings.nextAt)));
+        } else scheduleNext.setText("定时任务已关闭");
     }
 
     private void renderHistory() {
@@ -239,6 +312,36 @@ public final class ControlActivity extends Activity {
                 row.addView(names, new LinearLayout.LayoutParams(0, -2, 1));
                 row.addView(label("+" + entry.points + " 积分", 13, ACCENT, true));
                 details.addView(row);
+            }
+        }
+        List<RewardHistory.Run> runs = new RewardHistory(this).archiveSnapshot();
+        archiveSection.setVisibility(runs.isEmpty() ? View.GONE : View.VISIBLE);
+        archiveButton.setText((archiveExpanded ? "收起" : "查看") + "历史任务记录（"
+                + runs.size() + " 轮）");
+        archiveHistory.setVisibility(archiveExpanded ? View.VISIBLE : View.GONE);
+        archiveHistory.removeAllViews();
+        if (archiveExpanded) {
+            SimpleDateFormat format = new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
+            for (RewardHistory.Run run : runs) {
+                LinearLayout item = card();
+                archiveHistory.addView(item, top(8));
+                int points = 0;
+                int unknownCount = 0;
+                StringBuilder perTask = new StringBuilder();
+                for (RewardHistory.Entry entry : run.entries) {
+                    if (entry.points > 0) {
+                        points += entry.points;
+                        if (perTask.length() > 0) perTask.append("  ·  ");
+                        perTask.append("第").append(entry.sequence).append("条 +")
+                                .append(entry.points);
+                    } else unknownCount++;
+                }
+                item.addView(label(format.format(new Date(run.startedAt)) + " 至 "
+                        + format.format(new Date(run.finishedAt)), 12, MUTED, false));
+                item.addView(label(run.entries.size() + " 条 · 已核对 " + points
+                        + " 积分 · 待核对 " + unknownCount + " 条", 14, TEXT, true), top(5));
+                if (perTask.length() > 0) item.addView(label(perTask.toString(), 12,
+                        ACCENT, false), top(6));
             }
         }
         completed.setText(entries.size() + " 条");
