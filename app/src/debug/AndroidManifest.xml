@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name=".DebugBridgeReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.codex.yybpoints.DEBUG_START_DISPLAY" />
+                <action android:name="com.codex.yybpoints.DEBUG_STOP_DISPLAY" />
+                <action android:name="com.codex.yybpoints.DEBUG_START_BATCH" />
+                <action android:name="com.codex.yybpoints.DEBUG_QUERY_DISPLAYS" />
+                <action android:name="com.codex.yybpoints.DEBUG_ONE_CLICK_BATCH" />
+                <action android:name="com.codex.yybpoints.DEBUG_ONE_CLICK_STOP" />
+                <action android:name="com.codex.yybpoints.DEBUG_AUDIO_FOCUS_PROBE" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

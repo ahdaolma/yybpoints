@@ -1,0 +1,6 @@
+<resources>
+    <string-array name="recommended_scope">
+        <item>android</item>
+        <item>com.tencent.android.qqdownloader</item>
+    </string-array>
+</resources>

@@ -1,0 +1,1 @@
+Background video task controller for Tencent App Store (YingYongBao). It runs genuine rewarded ads on a trusted hidden display and continues only after the app confirms a reward. Recommended LSPosed scopes: System Framework and com.tencent.android.qqdownloader.

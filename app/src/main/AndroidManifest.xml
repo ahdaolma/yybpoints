@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="应用宝后台任务" android:description="@string/module_description"
+        android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher">
+        <activity android:name=".ControlActivity" android:exported="true" android:label="应用宝后台控制">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <receiver android:name=".ClaimStatusReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.codex.yybpoints.REAL_VIDEO_BATCH_STATUS" />
+            </intent-filter>
+        </receiver>
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="后台串行观看真实视频任务，确认到账后继续" />
+        <meta-data android:name="xposedminversion" android:value="82" />
+        <meta-data android:name="xposedscope" android:resource="@array/recommended_scope" />
+    </application>
+</manifest>

@@ -1,0 +1,57 @@
+apply plugin: 'com.android.application'
+
+def releaseStore = System.getenv('YYB_RELEASE_STORE_FILE')
+def releaseStorePassword = System.getenv('YYB_RELEASE_STORE_PASSWORD')
+def releaseAlias = System.getenv('YYB_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('YYB_RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = [releaseStore, releaseStorePassword, releaseAlias,
+        releaseKeyPassword].every { it != null && !it.isEmpty() }
+
+android {
+    namespace 'com.codex.yybpoints'
+    compileSdk 34
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId 'io.github.ahdaolma.yybpoints'
+        minSdk 23
+        targetSdk 28
+        versionCode 2
+        versionName '0.2.0-beta.1'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        // This LSPosed module is sideloaded; changing targetSdk also changes its
+        // broadcast behavior and requires separate device validation.
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStore)
+                storePassword releaseStorePassword
+                keyAlias releaseAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) signingConfig signingConfigs.release
+        }
+    }
+}
+
+dependencies {
+    compileOnly files('libs/api-82.jar')
+}
