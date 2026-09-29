@@ -18,6 +18,9 @@ import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.IBinder;
+import android.os.PowerManager;
+import android.os.RemoteException;
 import android.util.Log;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -33,15 +36,20 @@ final class SystemDisplayBridge {
     private static final String TARGET = "com.tencent.android.qqdownloader";
     private static final String TAG = "YYBBackground";
     private static final int TRUSTED_FLAG = 1 << 10;
+    private static final int OWN_DISPLAY_GROUP_FLAG = 1 << 11;
+    private static final int ALWAYS_UNLOCKED_FLAG = 1 << 12;
     private static final int DESTROY_ON_REMOVAL_FLAG = 1 << 8;
     private static final int OWN_FOCUS_FLAG = 1 << 14;
     private static final int KEEP_MAIN_FOCUS_FLAG = 1 << 16;
     private static VirtualDisplay display;
+    private static IBinder runOwner;
+    private static IBinder.DeathRecipient ownerDeath;
     private static ImageReader reader;
     private static HandlerThread drainThread;
     private static Handler cleanup;
     private static final long MAX_DISPLAY_LIFETIME_MS = 45 * 60_000L;
     private static Runnable expiry;
+    private static int cleanupSequence;
     private static boolean installed;
 
     private SystemDisplayBridge() { }
@@ -97,11 +105,7 @@ final class SystemDisplayBridge {
                     || intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
             Log.i(TAG, "module uninstall detected; releasing hidden display and receivers");
             release();
-            try {
-                forceStopTarget(context);
-            } catch (Throwable error) {
-                Log.w(TAG, "target process cleanup failed", error);
-            }
+            forceStopWithRetry(context, null);
             try { context.unregisterReceiver(commands); }
             catch (Throwable error) { Log.w(TAG, "command receiver cleanup failed", error); }
             try { context.unregisterReceiver(this); }
@@ -127,11 +131,21 @@ final class SystemDisplayBridge {
                 }
                 if (ACTION_STOP.equals(intent.getAction())) {
                     release();
-                    forceStopTarget(context);
-                    sendResult(context, "stop", true, -1, requestId,
-                            "后台显示已移除，应用宝进程已结束");
+                    forceStopWithRetry(context, success -> sendResult(context,
+                            "stop", success, -1, requestId, success
+                                    ? "后台显示已移除，应用宝进程已结束"
+                                    : "后台显示已移除，但应用宝进程停止未确认"));
                 } else if (ACTION_START.equals(intent.getAction())) {
+                    cleanupSequence++;
+                    IBinder owner = intent.getExtras() == null ? null
+                            : intent.getExtras().getBinder("runOwner");
+                    if (owner == null) throw new IllegalStateException("run owner missing");
                     int displayId = create(context);
+                    try { watchOwner(context, owner); }
+                    catch (RemoteException dead) {
+                        release();
+                        throw new IllegalStateException("run owner already gone", dead);
+                    }
                     try {
                         int taskId = findTargetTask(context);
                         if (taskId > 0) {
@@ -215,7 +229,8 @@ final class SystemDisplayBridge {
         display = manager.createVirtualDisplay("YYBPoints-Trusted", 180, 320, 80,
                 reader.getSurface(), DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
                         | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-                        | TRUSTED_FLAG | DESTROY_ON_REMOVAL_FLAG
+                        | TRUSTED_FLAG | OWN_DISPLAY_GROUP_FLAG | ALWAYS_UNLOCKED_FLAG
+                        | DESTROY_ON_REMOVAL_FLAG
                         | OWN_FOCUS_FLAG | KEEP_MAIN_FOCUS_FLAG);
         if (display == null || display.getDisplay() == null) {
             release();
@@ -228,13 +243,33 @@ final class SystemDisplayBridge {
                     || display.getDisplay().getDisplayId() != displayId) return;
             Log.w(TAG, "hidden display expired; forcing cleanup id=" + displayId);
             release();
-            try { forceStopTarget(context); }
-            catch (Throwable error) { Log.w(TAG, "expiry process cleanup failed", error); }
+            forceStopWithRetry(context, null);
         };
         cleanup.postDelayed(expiry, MAX_DISPLAY_LIFETIME_MS);
         XposedBridge.log("YYBBackground: trusted display created id=" + displayId);
         Log.i(TAG, "trusted display created id=" + displayId);
         return displayId;
+    }
+
+    private static void watchOwner(Context context, IBinder owner) throws RemoteException {
+        if (runOwner != null && ownerDeath != null) {
+            try { runOwner.unlinkToDeath(ownerDeath, 0); }
+            catch (Throwable ignored) { }
+            runOwner = null;
+            ownerDeath = null;
+        }
+        IBinder.DeathRecipient death = () -> {
+            Handler main = new Handler(Looper.getMainLooper());
+            main.post(() -> {
+                if (runOwner != owner || display == null) return;
+                Log.w(TAG, "module process died; removing hidden display");
+                release();
+                forceStopWithRetry(context, null);
+            });
+        };
+        owner.linkToDeath(death, 0);
+        runOwner = owner;
+        ownerDeath = death;
     }
 
     private static void sendResult(Context context, String operation, boolean success,
@@ -249,7 +284,47 @@ final class SystemDisplayBridge {
                 .setShareIdentityEnabled(true).toBundle());
     }
 
+    private interface CleanupCallback { void onComplete(boolean success); }
+
+    private static void forceStopWithRetry(Context context, CleanupCallback callback) {
+        int token = ++cleanupSequence;
+        PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        PowerManager.WakeLock wakeLock = power == null ? null
+                : power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "yybpoints:cleanup");
+        if (wakeLock != null) wakeLock.acquire(7_000L);
+        stopTargetOnce(context);
+        if (cleanup == null) cleanup = new Handler(Looper.getMainLooper());
+        cleanup.postDelayed(() -> {
+            if (token == cleanupSequence) stopTargetOnce(context);
+        }, 2_000L);
+        cleanup.postDelayed(() -> {
+            try {
+                if (token != cleanupSequence) return;
+                boolean success = stopTargetOnce(context);
+                if (callback != null) callback.onComplete(success);
+            } finally {
+                if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+            }
+        }, 5_000L);
+    }
+
+    private static boolean stopTargetOnce(Context context) {
+        try {
+            forceStopTarget(context);
+            return true;
+        } catch (Throwable error) {
+            Log.w(TAG, "target process cleanup failed", error);
+            return false;
+        }
+    }
+
     private static void release() {
+        if (runOwner != null && ownerDeath != null) {
+            try { runOwner.unlinkToDeath(ownerDeath, 0); }
+            catch (Throwable ignored) { }
+            runOwner = null;
+            ownerDeath = null;
+        }
         if (expiry != null && cleanup != null) {
             cleanup.removeCallbacks(expiry);
             expiry = null;

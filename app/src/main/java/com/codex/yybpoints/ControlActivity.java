@@ -194,7 +194,12 @@ public final class ControlActivity extends Activity {
             actionStarted = !coordinator.isSessionActive();
             actionLockedUntil = SystemClock.uptimeMillis() + 1500L;
             if (!actionStarted) coordinator.stop();
-            else coordinator.start();
+            else {
+                Intent run = new Intent(this, ScheduledBatchService.class)
+                        .setAction(ScheduledBatchService.ACTION_MANUAL_START);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(run);
+                else startService(run);
+            }
             renderAction();
             startButton.postDelayed(this::renderAction, 1550L);
         });
@@ -312,13 +317,15 @@ public final class ControlActivity extends Activity {
 
     private void renderAction() {
         boolean active = coordinator.isSessionActive();
-        boolean locked = SystemClock.uptimeMillis() < actionLockedUntil;
+        boolean locked = coordinator.isStopping()
+                || SystemClock.uptimeMillis() < actionLockedUntil;
         String title = active ? "任务进行中" : coordinator.rewardsFinished() ? "本轮已结束" : "准备就绪";
         if (!title.contentEquals(stateTitle.getText())) {
             stateTitle.setText(title);
             animateChange(stateTitle);
         }
-        String action = locked ? actionStarted ? "正在启动…" : "正在清理…"
+        String action = coordinator.isStopping() ? "正在清理…"
+                : locked ? actionStarted ? "正在启动…" : "正在清理…"
                 : active ? "停止并还原" : "开始后台观看";
         startButton.setEnabled(!locked);
         if (!action.contentEquals(startButton.getText())) {

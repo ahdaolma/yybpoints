@@ -7,6 +7,9 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.display.DisplayManager;
 import android.os.Handler;
+import android.os.Binder;
+import android.os.IBinder;
+import android.os.Bundle;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Display;
@@ -22,6 +25,7 @@ final class BackgroundBatchCoordinator {
 
     private static final String TAG = "YYBBackground";
     private static final String TARGET = "com.tencent.android.qqdownloader";
+    private static final IBinder RUN_OWNER = new Binder();
     private static BackgroundBatchCoordinator instance;
 
     static synchronized BackgroundBatchCoordinator get(Context context) {
@@ -129,6 +133,8 @@ final class BackgroundBatchCoordinator {
 
     boolean stopFailed() { return stopFailed; }
 
+    boolean isStopping() { return stopping; }
+
     boolean hasHiddenDisplay() {
         DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
         if (manager == null) return false;
@@ -153,8 +159,11 @@ final class BackgroundBatchCoordinator {
         waiting = true;
         new RewardHistory(context).reset();
         report("正在创建后台显示并迁移应用宝任务栈…");
+        Bundle owner = new Bundle();
+        owner.putBinder("runOwner", RUN_OWNER);
         sendVerifiedBroadcast(new Intent(SystemDisplayBridge.ACTION_START)
-                .setPackage("android").putExtra("requestId", generation));
+                .setPackage("android").putExtra("requestId", generation)
+                .putExtras(owner));
         int token = generation;
         main.postDelayed(() -> pollHiddenDisplay(token, 0), 500L);
         main.postDelayed(() -> {

@@ -11,18 +11,21 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 import java.util.List;
 
-/** Keeps the module controller alive while the scheduled hidden-display run is active. */
+/** Keeps the module controller awake during manual and scheduled hidden-display runs. */
 public final class ScheduledBatchService extends Service {
+    static final String ACTION_MANUAL_START = "com.codex.yybpoints.MANUAL_START";
     private static final String TAG = "YYBSchedule";
     private static final String CHANNEL = "yyb_scheduled_batch";
     private static final String RESULT_CHANNEL = "yyb_scheduled_result";
     private static final long RUN_LIMIT_MS = 42 * 60_000L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private BackgroundBatchCoordinator coordinator;
+    private PowerManager.WakeLock runWakeLock;
     private boolean started;
     private boolean finished;
     private boolean recovering;
@@ -49,18 +52,28 @@ public final class ScheduledBatchService extends Service {
         super.onCreate();
         coordinator = BackgroundBatchCoordinator.get(this);
         ensureNotificationChannels(this);
+        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+        if (power != null) {
+            runWakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                    "yybpoints:video-run");
+            runWakeLock.acquire(RUN_LIMIT_MS + 60_000L);
+        }
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         startForeground(81, builder.setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle("应用宝后台任务")
-                .setContentText("定时观看进行中").setOngoing(true).build());
+                .setContentText("视频任务正在运行")
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setOngoing(true).build());
     }
 
     static void ensureNotificationChannels(Context context) {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager manager = (NotificationManager) context.getSystemService(NOTIFICATION_SERVICE);
-            manager.createNotificationChannel(new NotificationChannel(CHANNEL,
-                    "应用宝定时任务", NotificationManager.IMPORTANCE_LOW));
+            NotificationChannel running = new NotificationChannel(CHANNEL,
+                    "应用宝运行状态", NotificationManager.IMPORTANCE_LOW);
+            running.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            manager.createNotificationChannel(running);
             manager.createNotificationChannel(new NotificationChannel(RESULT_CHANNEL,
                     "应用宝任务结果", NotificationManager.IMPORTANCE_LOW));
         }
@@ -140,9 +153,18 @@ public final class ScheduledBatchService extends Service {
         main.removeCallbacks(timeout);
         if (coordinator != null) {
             coordinator.removeListener(listener);
-            if (started && !finished && coordinator.isSessionActive()) coordinator.stop();
+            if (started && !finished && coordinator.isSessionActive()) {
+                coordinator.stop(success -> releaseWakeLock());
+                main.postDelayed(this::releaseWakeLock, 12_000L);
+            } else releaseWakeLock();
+        } else {
+            releaseWakeLock();
         }
         super.onDestroy();
+    }
+
+    private void releaseWakeLock() {
+        if (runWakeLock != null && runWakeLock.isHeld()) runWakeLock.release();
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }

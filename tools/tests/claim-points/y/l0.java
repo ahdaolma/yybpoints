@@ -1,11 +1,11 @@
 package y;
 
 public final class l0 {
-    private int a;
-    private j c;
+    private int status;
+    private j reward;
 
     public l0(int code, j award) {
-        a = code;
-        c = award;
+        status = code;
+        reward = award;
     }
 }

@@ -121,6 +121,9 @@ final class DynamicClaimHooks {
                             if (parsed >= 0) innerCode = parsed;
                             if (parsed == 0) {
                                 receivedPoints = ClaimPointReader.fromSuccessResponse(response);
+                                if (receivedPoints <= 0) HookEntry.record(
+                                        "claim amount unavailable shape="
+                                                + ClaimPointReader.fieldShape(response));
                             }
                         }
                     }
@@ -205,6 +208,9 @@ final class DynamicClaimHooks {
                     int inner = responseCode(hook.args[1]);
                     int receivedPoints = code == 0 && inner == 0
                             ? ClaimPointReader.fromSuccessResponse(hook.args[1]) : -1;
+                    if (code == 0 && inner == 0 && receivedPoints <= 0)
+                        HookEntry.record("view model amount unavailable shape="
+                                + ClaimPointReader.fieldShape(hook.args[1]));
                     HookEntry.record("view model claim result taskId=" + taskId
                             + " outerCode=" + code + " innerCode=" + inner
                             + " receivedPoints=" + receivedPoints);
@@ -236,6 +242,10 @@ final class DynamicClaimHooks {
     }
 
     private static int responseCode(Object response) {
+        if (response instanceof List) {
+            List<?> items = (List<?>) response;
+            response = items.isEmpty() ? null : items.get(0);
+        }
         if (response == null) return -1;
         try {
             java.lang.reflect.Field field = response.getClass().getDeclaredField("f8147a");
